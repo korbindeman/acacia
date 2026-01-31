@@ -1,0 +1,15 @@
+[package]
+name = "acacia_server"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+acacia_core = { workspace = true }
+acacia_db = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+tower-http = { workspace = true }
+sea-orm = { workspace = true }
+inventory = { workspace = true }
+thiserror = { workspace = true }

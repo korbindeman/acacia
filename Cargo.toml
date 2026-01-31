@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "acacia",
+    "acacia_core",
+    "acacia_macros",
+    "acacia_db",
+    "acacia_server",
+    "examples/todo_app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Web framework
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["fs"] }
+
+# Database (SeaORM)
+sea-orm = { version = "1.1", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+
+# Proc macro support
+proc-macro2 = "1"
+quote = "1"
+syn = { version = "2", features = ["full", "extra-traits"] }
+rstml = "0.12"
+
+# Route registration
+inventory = "0.3"
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# HTML escaping
+html-escape = "0.2"
+
+# Error handling
+thiserror = "1"
+anyhow = "1"
+
+# HTTP types
+http = "1"
+
+# Acacia crates
+acacia = { path = "acacia" }
+acacia_core = { path = "acacia_core" }
+acacia_macros = { path = "acacia_macros" }
+acacia_db = { path = "acacia_db" }
+acacia_server = { path = "acacia_server" }

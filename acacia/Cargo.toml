@@ -1,0 +1,14 @@
+[package]
+name = "acacia"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+acacia_core = { workspace = true }
+acacia_macros = { workspace = true }
+acacia_db = { workspace = true }
+acacia_server = { workspace = true }
+axum = { workspace = true }
+sea-orm = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }

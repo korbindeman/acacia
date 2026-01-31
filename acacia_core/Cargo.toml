@@ -1,0 +1,13 @@
+[package]
+name = "acacia_core"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+axum = { workspace = true }
+http = { workspace = true }
+html-escape = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }
+inventory = { workspace = true }
+sea-orm = { workspace = true }
