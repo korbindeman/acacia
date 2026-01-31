@@ -3,6 +3,10 @@ name = "acacia_core"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+tailwind = []
+
 [dependencies]
 axum = { workspace = true }
 http = { workspace = true }

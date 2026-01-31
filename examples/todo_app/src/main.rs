@@ -19,17 +19,17 @@ pub struct NewTask {
 fn TaskItem(task: &Task) -> Fragment {
     let task_id = task.id;
     html! {
-        <li id={format!("task-{}", task_id)} style="display: flex; gap: 8px; align-items: center; padding: 8px; border-bottom: 1px solid #eee;">
+        <li id={format!("task-{}", task_id)} class="flex gap-2 items-center p-2 border-b border-gray-200">
             <input
                 type="checkbox"
                 checked={task.done}
                 {submits(TOGGLE_TASK(task_id)).target(Target::Parent)}
             />
-            <span style={if task.done { "text-decoration: line-through; opacity: 0.5;" } else { "" }}>
+            <span class={tw!("flex-1", "line-through opacity-50" => task.done)}>
                 {&task.title}
             </span>
-            <button {removes(DELETE_TASK(task_id))} style="margin-left: auto; cursor: pointer;">
-                {"x"}
+            <button {removes(DELETE_TASK(task_id))} class="ml-auto cursor-pointer text-gray-500 hover:text-red-500">
+                {"×"}
             </button>
         </li>
     }
@@ -40,25 +40,25 @@ async fn home(db: Db) -> Result<Page> {
     let tasks = db.all::<Task>().await?;
 
     Ok(html! {
-        <main style="max-width: 500px; margin: 0 auto; padding: 20px; font-family: system-ui, sans-serif;">
-            <h1 style="margin-bottom: 20px;">{"Tasks"}</h1>
-            <ul id="tasks" style="list-style: none; padding: 0; margin: 0 0 20px 0; border: 1px solid #ddd; border-radius: 4px;">
+        <main class="max-w-md mx-auto p-5 font-sans">
+            <h1 class="mb-5 text-2xl font-bold">{"Tasks"}</h1>
+            <ul id="tasks" class="list-none p-0 mb-5 border border-gray-300 rounded">
                 {for task in &tasks { TaskItem(task) }}
             </ul>
             <form
                 {submits(CREATE_TASK).into("#tasks").append()}
                 hx-on::after-request="this.reset()"
-                style="display: flex; gap: 8px;"
+                class="flex gap-2"
             >
                 <input
                     name="title"
                     placeholder="New task..."
                     required
-                    style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;"
+                    class="flex-1 p-2 border border-gray-300 rounded"
                 />
                 <button
                     type="submit"
-                    style="padding: 8px 16px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer;"
+                    class="px-4 py-2 bg-blue-500 text-white border-none rounded cursor-pointer hover:bg-blue-600"
                 >
                     {"Add"}
                 </button>

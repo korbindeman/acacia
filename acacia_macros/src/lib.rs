@@ -3,10 +3,13 @@
 use proc_macro::TokenStream;
 use quote::quote;
 
+mod form;
 mod html;
 mod model;
 mod route;
-mod form;
+
+#[cfg(feature = "tailwind")]
+mod tw;
 
 /// The `html!` macro for writing JSX-like HTML templates.
 ///
@@ -105,4 +108,23 @@ pub fn derive_model(input: TokenStream) -> TokenStream {
 #[proc_macro_derive(Form, attributes(for_model))]
 pub fn derive_form(input: TokenStream) -> TokenStream {
     form::derive_form_impl(input)
+}
+
+/// The `tw!` macro for composing Tailwind CSS classes.
+///
+/// # Example
+/// ```ignore
+/// // Static classes
+/// tw!["flex", "items-center", "gap-4"]
+///
+/// // Conditional classes
+/// tw!("px-4 py-2", "bg-blue-500" => is_active, "opacity-50" => disabled)
+///
+/// // With Option<&str>
+/// tw!["flex", some_class, None::<&str>]
+/// ```
+#[cfg(feature = "tailwind")]
+#[proc_macro]
+pub fn tw(input: TokenStream) -> TokenStream {
+    tw::tw_impl(input)
 }

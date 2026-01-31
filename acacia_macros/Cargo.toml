@@ -6,6 +6,10 @@ edition.workspace = true
 [lib]
 proc-macro = true
 
+[features]
+default = []
+tailwind = []
+
 [dependencies]
 proc-macro2 = { workspace = true }
 quote = { workspace = true }

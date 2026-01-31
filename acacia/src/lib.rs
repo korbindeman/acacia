@@ -28,10 +28,14 @@ pub mod prelude {
     };
 
     // Macros
+    #[cfg(feature = "tailwind")]
+    pub use acacia_macros::tw;
     pub use acacia_macros::{action, component, html, page, Form, Model};
 
     // Database
-    pub use acacia_db::{Db, Form as FormTrait, InsertableFor, MigratePolicy, Model as ModelTrait, SqlValue};
+    pub use acacia_db::{
+        Db, Form as FormTrait, InsertableFor, MigratePolicy, Model as ModelTrait, SqlValue,
+    };
 
     // Server
     pub use acacia_server::Acacia;

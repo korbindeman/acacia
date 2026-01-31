@@ -3,6 +3,10 @@ name = "acacia"
 version.workspace = true
 edition.workspace = true
 
+[features]
+default = []
+tailwind = ["acacia_core/tailwind", "acacia_macros/tailwind"]
+
 [dependencies]
 acacia_core = { workspace = true }
 acacia_macros = { workspace = true }

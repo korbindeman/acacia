@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-acacia = { path = "../../acacia" }
+acacia = { path = "../../acacia", features = ["tailwind"] }
 acacia_core = { path = "../../acacia_core" }
 acacia_db = { path = "../../acacia_db" }
 tokio = { workspace = true }

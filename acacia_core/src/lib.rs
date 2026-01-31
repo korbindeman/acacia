@@ -7,6 +7,9 @@ use std::fmt;
 pub mod hateoas;
 pub mod route;
 
+#[cfg(feature = "tailwind")]
+pub mod tw;
+
 pub use hateoas::*;
 pub use route::*;
 
@@ -71,6 +74,7 @@ impl std::iter::FromIterator<Fragment> for Fragment {
 pub struct Page(pub String);
 
 impl Page {
+    #[cfg(not(feature = "tailwind"))]
     pub fn new(content: String) -> Self {
         let html = format!(
             r#"<!DOCTYPE html>
@@ -89,6 +93,27 @@ impl Page {
         Self(html)
     }
 
+    #[cfg(feature = "tailwind")]
+    pub fn new(content: String) -> Self {
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Acacia App</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="/__acacia__/htmx.min.js"></script>
+</head>
+<body>
+{content}
+</body>
+</html>"#
+        );
+        Self(html)
+    }
+
+    #[cfg(not(feature = "tailwind"))]
     pub fn with_title(content: String, title: &str) -> Self {
         let html = format!(
             r#"<!DOCTYPE html>
@@ -97,6 +122,26 @@ impl Page {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{title}</title>
+    <script src="/__acacia__/htmx.min.js"></script>
+</head>
+<body>
+{content}
+</body>
+</html>"#
+        );
+        Self(html)
+    }
+
+    #[cfg(feature = "tailwind")]
+    pub fn with_title(content: String, title: &str) -> Self {
+        let html = format!(
+            r#"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{title}</title>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script src="/__acacia__/htmx.min.js"></script>
 </head>
 <body>
@@ -210,10 +255,9 @@ where
         req: axum::extract::Request,
         state: &S,
     ) -> std::result::Result<Self, Self::Rejection> {
-        let axum::extract::Form(value) =
-            axum::extract::Form::<T>::from_request(req, state)
-                .await
-                .map_err(|e| AppError::BadRequest(e.to_string()))?;
+        let axum::extract::Form(value) = axum::extract::Form::<T>::from_request(req, state)
+            .await
+            .map_err(|e| AppError::BadRequest(e.to_string()))?;
         Ok(Valid(value))
     }
 }
