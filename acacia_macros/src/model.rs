@@ -1,138 +1,133 @@
-//! Implementation of the #[derive(Model)] macro.
+//! Implementation of the #[model] attribute macro.
+//!
+//! This macro generates SeaORM 2.0 entity definitions from a user-friendly struct syntax.
+//!
+//! User writes:
+//! ```ignore
+//! #[model("tasks")]
+//! pub struct Task {
+//!     #[key]
+//!     pub id: i32,
+//!     pub title: String,
+//!     pub done: bool,
+//! }
+//! ```
+//!
+//! Macro generates a SeaORM entity module (`task`) with Entity, Model, ActiveModel, etc.
+//! and re-exports `task::Entity` as `Task`.
 
 use proc_macro::TokenStream;
 use quote::{format_ident, quote};
-use syn::{parse_macro_input, Data, DeriveInput, Fields, Ident, LitStr, Type};
+use syn::{parse_macro_input, Data, DeriveInput, Fields, LitStr};
 
-pub fn derive_model_impl(input: TokenStream) -> TokenStream {
-    let input = parse_macro_input!(input as DeriveInput);
+/// Attribute macro implementation for #[model("table_name")]
+pub fn model_impl(attr: TokenStream, item: TokenStream) -> TokenStream {
+    // Parse the table name from the attribute
+    let table_name = if attr.is_empty() {
+        None
+    } else {
+        Some(parse_macro_input!(attr as LitStr).value())
+    };
+
+    let input = parse_macro_input!(item as DeriveInput);
     let name = &input.ident;
+    let vis = &input.vis;
 
-    // Find table name from #[table("...")] attribute
-    let table_name = input
-        .attrs
-        .iter()
-        .find_map(|attr| {
-            if attr.path().is_ident("table") {
-                attr.parse_args::<LitStr>().ok()
-            } else {
-                None
-            }
-        })
-        .map(|s| s.value())
-        .unwrap_or_else(|| name.to_string().to_lowercase() + "s");
+    // Use provided table name or derive from struct name
+    let table_name = table_name.unwrap_or_else(|| to_snake_case(&name.to_string()) + "s");
 
     // Get struct fields
     let fields = match &input.data {
         Data::Struct(data) => match &data.fields {
             Fields::Named(fields) => &fields.named,
-            _ => panic!("Model derive only supports structs with named fields"),
+            _ => panic!("model attribute only supports structs with named fields"),
         },
-        _ => panic!("Model derive only supports structs"),
+        _ => panic!("model attribute only supports structs"),
     };
 
-    // Find the key field
-    let mut key_field: Option<(&Ident, &Type)> = None;
-    let mut regular_fields: Vec<(&Ident, &Type)> = Vec::new();
+    // Build the field definitions with SeaORM attributes
+    let mut field_defs = Vec::new();
 
     for field in fields {
         let field_name = field.ident.as_ref().unwrap();
         let field_type = &field.ty;
-
         let is_key = field.attrs.iter().any(|attr| attr.path().is_ident("key"));
+        let type_str = quote!(#field_type).to_string();
 
         if is_key {
-            key_field = Some((field_name, field_type));
+            field_defs.push(quote! {
+                #[sea_orm(primary_key)]
+                pub #field_name: #field_type
+            });
+        } else if type_str == "bool" {
+            // Bool fields default to false
+            field_defs.push(quote! {
+                #[sea_orm(default_value = false)]
+                pub #field_name: #field_type
+            });
         } else {
-            regular_fields.push((field_name, field_type));
+            field_defs.push(quote! {
+                pub #field_name: #field_type
+            });
         }
     }
 
-    let (key_name, key_type) = key_field.expect("Model must have a #[key] field");
+    // Module name (snake_case of the struct name)
+    let mod_name = format_ident!("{}", to_snake_case(&name.to_string()));
 
-    // Generate field names and types
-    let field_names: Vec<_> = regular_fields.iter().map(|(n, _)| *n).collect();
-    let field_types: Vec<_> = regular_fields.iter().map(|(_, t)| *t).collect();
-
-    // Active model name
-    let active_model_name = format_ident!("{}ActiveModel", name);
-
+    // The attribute macro replaces the struct with a module + re-export
     let expanded = quote! {
-        // FromRow implementation using sea-orm's FromQueryResult pattern
-        impl ::acacia_db::FromRow for #name {
-            fn from_row(row: &::sea_orm::QueryResult) -> ::acacia_db::Result<Self> {
-                use ::sea_orm::TryGetable;
-                Ok(Self {
-                    #key_name: row.try_get("", stringify!(#key_name))
-                        .map_err(|e| ::acacia_db::DbError::Query(e.to_string()))?,
-                    #(
-                        #field_names: row.try_get("", stringify!(#field_names))
-                            .map_err(|e| ::acacia_db::DbError::Query(e.to_string()))?,
-                    )*
-                })
+        /// Generated SeaORM entity module
+        #vis mod #mod_name {
+            use sea_orm::entity::prelude::*;
+            use serde::{Deserialize, Serialize};
+
+            #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel, Serialize, Deserialize)]
+            #[sea_orm(table_name = #table_name)]
+            pub struct Model {
+                #(#field_defs,)*
+            }
+
+            #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
+            pub enum Relation {}
+
+            impl ActiveModelBehavior for ActiveModel {}
+
+            /// Create table statement for migrations
+            pub fn __create_table_stmt(schema: &::sea_orm::Schema) -> ::sea_orm::sea_query::TableCreateStatement {
+                schema.create_table_from_entity(Entity).if_not_exists().to_owned()
             }
         }
 
-        // Model trait implementation
-        impl ::acacia_db::Model for #name {
-            type Key = #key_type;
-            type ActiveModel = #active_model_name;
-
-            fn table_name() -> &'static str {
-                #table_name
-            }
-
-            fn key(&self) -> Self::Key {
-                self.#key_name.clone()
-            }
-        }
-
-        // Active model for inserts/updates
-        #[derive(Default, Clone)]
-        pub struct #active_model_name {
-            #(pub #field_names: Option<#field_types>,)*
-        }
-
-        impl #active_model_name {
-            pub fn new() -> Self {
-                Self::default()
-            }
-        }
-
-        // Schema definition for migrations
-        impl ::acacia_db::HasSchema for #name {
-            fn schema() -> ::acacia_db::TableSchema {
-                ::acacia_db::TableSchema {
-                    name: #table_name.to_string(),
-                    columns: vec![
-                        ::acacia_db::ColumnSchema {
-                            name: stringify!(#key_name).to_string(),
-                            sql_type: <#key_type as ::acacia_db::SqlType>::sql_type(),
-                            primary_key: true,
-                            auto_increment: true,
-                            nullable: false,
-                            default: None,
-                        },
-                        #(
-                            ::acacia_db::ColumnSchema {
-                                name: stringify!(#field_names).to_string(),
-                                sql_type: <#field_types as ::acacia_db::SqlType>::sql_type(),
-                                primary_key: false,
-                                auto_increment: false,
-                                nullable: false,
-                                default: <#field_types as ::acacia_db::SqlType>::default_value(),
-                            },
-                        )*
-                    ],
-                }
-            }
-        }
-
-        // Register schema for auto-migration
+        // Register entity for auto-migration
         ::inventory::submit! {
-            ::acacia_db::SchemaRegistration::new(|| <#name as ::acacia_db::HasSchema>::schema())
+            ::acacia_db::EntityRegistration::new(#mod_name::__create_table_stmt)
         }
+
+        // Re-export the Model with the original name for ergonomic usage:
+        // `db.all::<Task>()` and `fn component(task: &Task)`
+        #vis use #mod_name::Model as #name;
     };
 
     expanded.into()
+}
+
+// Keep this for the deprecated derive macro
+pub fn derive_model_impl(_input: TokenStream) -> TokenStream {
+    quote! {
+        compile_error!("Use #[model(\"table_name\")] attribute macro instead of #[derive(Model)]");
+    }
+    .into()
+}
+
+/// Convert a string to snake_case
+fn to_snake_case(s: &str) -> String {
+    let mut result = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            result.push('_');
+        }
+        result.push(c.to_ascii_lowercase());
+    }
+    result
 }

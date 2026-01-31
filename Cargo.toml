@@ -22,8 +22,13 @@ axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["fs"] }
 
-# Database (SeaORM)
-sea-orm = { version = "1.1", features = ["runtime-tokio-rustls", "sqlx-sqlite"] }
+# Database (SeaORM 2.0 with entity-first workflow)
+sea-orm = { version = "2.0.0-rc.30", features = [
+    "runtime-tokio-rustls",
+    "sqlx-sqlite",
+    "schema-sync",
+    "entity-registry",
+] }
 
 # Proc macro support
 proc-macro2 = "1"

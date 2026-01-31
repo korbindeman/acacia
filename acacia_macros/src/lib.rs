@@ -77,12 +77,15 @@ pub fn action(attr: TokenStream, item: TokenStream) -> TokenStream {
     route::action_impl(attr, item)
 }
 
-/// Derive the Model trait for database entities.
+/// Define a database model using SeaORM's entity-first workflow.
+///
+/// This attribute macro transforms a struct into a SeaORM entity module.
+/// The original struct is replaced with a module containing Entity, Model,
+/// ActiveModel, Column, etc.
 ///
 /// # Example
 /// ```ignore
-/// #[derive(Model)]
-/// #[table("tasks")]
+/// #[model("tasks")]
 /// pub struct Task {
 ///     #[key]
 ///     pub id: i32,
@@ -90,19 +93,46 @@ pub fn action(attr: TokenStream, item: TokenStream) -> TokenStream {
 ///     pub done: bool,
 /// }
 /// ```
-#[proc_macro_derive(Model, attributes(table, key))]
-pub fn derive_model(input: TokenStream) -> TokenStream {
-    model::derive_model_impl(input)
+///
+/// This generates a `task` module and re-exports `task::Entity` as `Task`.
+#[proc_macro_attribute]
+pub fn model(attr: TokenStream, item: TokenStream) -> TokenStream {
+    model::model_impl(attr, item)
 }
 
-/// Derive the Form trait for form handling.
+// Keep the derive macro for backwards compatibility, but it just emits an error
+#[proc_macro_derive(Model, attributes(table, key))]
+pub fn derive_model(_input: TokenStream) -> TokenStream {
+    quote! {
+        compile_error!("Use #[model(\"table_name\")] attribute macro instead of #[derive(Model)]");
+    }
+    .into()
+}
+
+/// Define a form linked to a model for inserts/updates.
+///
+/// # Example
+/// ```ignore
+/// #[form(Task)]
+/// pub struct NewTask {
+///     pub title: String,
+/// }
+/// ```
+///
+/// This generates Deserialize and IntoActiveModel implementations.
+#[proc_macro_attribute]
+pub fn form(attr: TokenStream, item: TokenStream) -> TokenStream {
+    form::form_impl(attr, item)
+}
+
+/// Derive the Form trait for standalone forms (not linked to a model).
 ///
 /// # Example
 /// ```ignore
 /// #[derive(Form)]
-/// #[for_model(Task)]
-/// pub struct NewTask {
-///     pub title: String,
+/// pub struct ContactForm {
+///     pub email: String,
+///     pub message: String,
 /// }
 /// ```
 #[proc_macro_derive(Form, attributes(for_model))]

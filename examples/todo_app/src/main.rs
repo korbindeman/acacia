@@ -1,7 +1,6 @@
 use acacia::prelude::*;
 
-#[derive(Model)]
-#[table("tasks")]
+#[model("tasks")]
 pub struct Task {
     #[key]
     pub id: i32,
@@ -9,10 +8,9 @@ pub struct Task {
     pub done: bool,
 }
 
-#[derive(Form)]
-#[for_model(Task)]
-pub struct NewTask {
-    pub title: String,
+#[form(Task)]
+struct NewTask {
+    title: String,
 }
 
 #[component]
@@ -75,7 +73,7 @@ async fn create_task(db: Db, form: Valid<NewTask>) -> Result<Fragment> {
 
 #[action("/tasks/{id}/toggle", method = "POST")]
 async fn toggle_task(Path(id): Path<i32>, db: Db) -> Result<Fragment> {
-    let task = db.update::<Task, _>(id, |t| t.done = !t.done).await?;
+    let task = db.toggle::<Task, _>(id, |t| &mut t.done).await?;
     Ok(TaskItem(&task))
 }
 

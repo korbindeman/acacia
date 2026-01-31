@@ -30,12 +30,14 @@ pub mod prelude {
     // Macros
     #[cfg(feature = "tailwind")]
     pub use acacia_macros::tw;
-    pub use acacia_macros::{action, component, html, page, Form, Model};
+    pub use acacia_macros::{action, component, form, html, model, page, Form};
 
     // Database
-    pub use acacia_db::{
-        Db, Form as FormTrait, InsertableFor, MigratePolicy, Model as ModelTrait, SqlValue,
-    };
+    pub use acacia_db::{Db, Form as FormTrait, MigratePolicy, Set};
+
+    // SeaORM re-exports for entity definitions and queries
+    pub use sea_orm::entity::prelude::*;
+    pub use sea_orm::IntoActiveModel;
 
     // Server
     pub use acacia_server::Acacia;

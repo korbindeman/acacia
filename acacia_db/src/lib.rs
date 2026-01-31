@@ -1,17 +1,37 @@
-//! Database layer for Acacia, wrapping SeaORM.
+//! Database layer for Acacia, wrapping SeaORM 2.0 with entity-first workflow.
 
 use axum::{
     async_trait,
     extract::{FromRef, FromRequestParts},
     http::request::Parts,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, QueryResult, Statement};
+use sea_orm::{
+    ActiveModelBehavior, ActiveModelTrait, ConnectionTrait, DatabaseConnection, EntityTrait,
+    IntoActiveModel, ModelTrait, PrimaryKeyTrait, Schema,
+};
 use std::sync::Arc;
 
-mod schema;
+// Re-export SeaORM types that users need
+pub use sea_orm::{
+    ActiveValue, ColumnTrait, DeriveEntityModel, DeriveRelation, EntityName, EnumIter,
+    IntoActiveModel as _, QueryFilter, Set,
+};
 
-pub use schema::*;
-pub use sea_orm::QueryResult as Row;
+/// Registration for entity schema creation.
+/// Each entity registers itself so migrations can create the table.
+pub struct EntityRegistration {
+    pub create_table: fn(&Schema) -> sea_orm::sea_query::TableCreateStatement,
+}
+
+impl EntityRegistration {
+    pub const fn new(
+        create_table: fn(&Schema) -> sea_orm::sea_query::TableCreateStatement,
+    ) -> Self {
+        Self { create_table }
+    }
+}
+
+inventory::collect!(EntityRegistration);
 
 /// Database error type.
 #[derive(Debug, thiserror::Error)]
@@ -30,7 +50,10 @@ pub type Result<T> = std::result::Result<T, DbError>;
 
 impl From<sea_orm::DbErr> for DbError {
     fn from(err: sea_orm::DbErr) -> Self {
-        DbError::Query(err.to_string())
+        match err {
+            sea_orm::DbErr::RecordNotFound(_) => DbError::NotFound,
+            _ => DbError::Query(err.to_string()),
+        }
     }
 }
 
@@ -45,23 +68,6 @@ impl From<DbError> for acacia_core::AppError {
     }
 }
 
-/// Trait for converting rows to models.
-pub trait FromRow: Sized {
-    fn from_row(row: &QueryResult) -> Result<Self>;
-}
-
-/// Trait for database models.
-pub trait Model: FromRow + Sized + Send + Sync + 'static {
-    type Key: Clone + Send + Sync + std::fmt::Display + 'static;
-    type ActiveModel: Default + Clone + Send + Sync;
-
-    fn table_name() -> &'static str;
-    fn key(&self) -> Self::Key;
-}
-
-/// Trait for forms.
-pub trait Form: serde::de::DeserializeOwned + Send + Sync {}
-
 /// Migration policy.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum MigratePolicy {
@@ -70,7 +76,10 @@ pub enum MigratePolicy {
     None,
 }
 
-/// Database extractor for Axum handlers.
+/// Database handle for Axum handlers.
+///
+/// This wraps a SeaORM DatabaseConnection and provides convenient methods
+/// for common database operations.
 #[derive(Clone)]
 pub struct Db {
     conn: Arc<DatabaseConnection>,
@@ -83,239 +92,164 @@ impl Db {
         }
     }
 
+    /// Get the underlying SeaORM connection for advanced operations.
     pub fn connection(&self) -> &DatabaseConnection {
         &self.conn
     }
 
     /// Get all records of a model type.
-    pub async fn all<M: Model>(&self) -> Result<Vec<M>> {
-        let table = M::table_name();
-        let sql = format!("SELECT * FROM {}", table);
-        let results = self
-            .conn
-            .query_all(Statement::from_string(DbBackend::Sqlite, sql))
-            .await?;
-
-        results.into_iter().map(|row| M::from_row(&row)).collect()
+    ///
+    /// # Example
+    /// ```ignore
+    /// let tasks = db.all::<Task>().await?;
+    /// ```
+    pub async fn all<M>(&self) -> Result<Vec<M>>
+    where
+        M: ModelTrait,
+        M::Entity: EntityTrait<Model = M>,
+    {
+        M::Entity::find().all(&*self.conn).await.map_err(Into::into)
     }
 
-    /// Get a single record by key.
-    pub async fn get<M: Model>(&self, key: M::Key) -> Result<Option<M>> {
-        let table = M::table_name();
-        let sql = format!("SELECT * FROM {} WHERE id = ?", table);
-        let result = self
-            .conn
-            .query_one(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                &sql,
-                vec![key.to_string().into()],
-            ))
-            .await?;
-
-        match result {
-            Some(row) => Ok(Some(M::from_row(&row)?)),
-            None => Ok(None),
-        }
+    /// Get a single record by primary key.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let task = db.get::<Task>(1).await?;
+    /// ```
+    pub async fn get<M>(
+        &self,
+        id: <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType,
+    ) -> Result<Option<M>>
+    where
+        M: ModelTrait,
+        M::Entity: EntityTrait<Model = M>,
+    {
+        M::Entity::find_by_id(id)
+            .one(&*self.conn)
+            .await
+            .map_err(Into::into)
     }
 
-    /// Insert a new record.
+    /// Insert a new record from a form/DTO.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let task = db.insert::<Task, _>(NewTask { title: "...".into() }).await?;
+    /// ```
     pub async fn insert<M, F>(&self, form: F) -> Result<M>
     where
-        M: Model,
-        F: InsertableFor<M>,
+        M: ModelTrait + IntoActiveModel<<M::Entity as EntityTrait>::ActiveModel>,
+        M::Entity: EntityTrait<Model = M>,
+        F: IntoActiveModel<<M::Entity as EntityTrait>::ActiveModel>,
+        <M::Entity as EntityTrait>::ActiveModel: ActiveModelTrait<Entity = M::Entity> + Send,
     {
-        let (columns, values) = form.columns_and_values();
-        let table = M::table_name();
-
-        let placeholders: Vec<_> = (0..values.len()).map(|_| "?").collect();
-
-        let sql = format!(
-            "INSERT INTO {} ({}) VALUES ({})",
-            table,
-            columns.join(", "),
-            placeholders.join(", ")
-        );
-
-        let sea_values: Vec<sea_orm::Value> = values.into_iter().map(|v| v.into()).collect();
-
-        self.conn
-            .execute(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                &sql,
-                sea_values,
-            ))
-            .await?;
-
-        // Get the last inserted row
-        let last_id_sql = "SELECT last_insert_rowid() as id";
-        let id_result = self
-            .conn
-            .query_one(Statement::from_string(DbBackend::Sqlite, last_id_sql))
-            .await?
-            .ok_or(DbError::NotFound)?;
-
-        let id: i32 = id_result
-            .try_get("", "id")
-            .map_err(|e| DbError::Query(e.to_string()))?;
-
-        let select_sql = format!("SELECT * FROM {} WHERE id = ?", table);
-        let result = self
-            .conn
-            .query_one(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                &select_sql,
-                vec![id.into()],
-            ))
-            .await?
-            .ok_or(DbError::NotFound)?;
-
-        M::from_row(&result)
+        let active_model = form.into_active_model();
+        let result = active_model.insert(&*self.conn).await?;
+        Ok(result)
     }
 
-    /// Update a record with a mutation function.
-    pub async fn update<M, F>(&self, key: M::Key, f: F) -> Result<M>
+    /// Update a record by applying a mutation function to the model.
+    ///
+    /// The closure receives a mutable reference to the model data,
+    /// which you can modify directly. The changes are then saved to the database.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let task = db.update::<Task>(1, |task| {
+    ///     task.done = !task.done;
+    /// }).await?;
+    /// ```
+    pub async fn update<M, F>(
+        &self,
+        id: <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType,
+        mutate: F,
+    ) -> Result<M>
     where
-        M: Model,
+        M: ModelTrait + IntoActiveModel<<M::Entity as EntityTrait>::ActiveModel>,
+        M::Entity: EntityTrait<Model = M>,
+        <M::Entity as EntityTrait>::ActiveModel: ActiveModelTrait<Entity = M::Entity> + Send,
         F: FnOnce(&mut M),
     {
-        // Get the current record
-        let mut record = self.get::<M>(key.clone()).await?.ok_or(DbError::NotFound)?;
+        let mut model = self.get::<M>(id).await?.ok_or(DbError::NotFound)?;
 
-        // Apply the mutation
-        f(&mut record);
+        // Apply the user's mutation to the model
+        mutate(&mut model);
 
-        // For now, we'll use a simple approach - update all fields
-        // This requires the model to implement a method to get update values
-        let table = M::table_name();
-
-        // We need a way to get the updated values from the model
-        // For MVP, we'll use a simpler toggle approach for the todo example
-        let sql = format!("UPDATE {} SET done = NOT done WHERE id = ?", table);
-
-        self.conn
-            .execute(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                &sql,
-                vec![key.to_string().into()],
-            ))
-            .await?;
-
-        // Return the updated record
-        self.get::<M>(key).await?.ok_or(DbError::NotFound)
+        // Convert to ActiveModel and save
+        let active_model = model.into_active_model();
+        let updated = active_model.update(&*self.conn).await?;
+        Ok(updated)
     }
 
-    /// Delete a record by key.
-    pub async fn delete<M: Model>(&self, key: M::Key) -> Result<()> {
-        let table = M::table_name();
-        let sql = format!("DELETE FROM {} WHERE id = ?", table);
+    /// Toggle a boolean field on a record.
+    ///
+    /// # Example
+    /// ```ignore
+    /// let task = db.toggle::<Task>(id, |t| &mut t.done).await?;
+    /// ```
+    pub async fn toggle<M, F>(
+        &self,
+        id: <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType,
+        field: F,
+    ) -> Result<M>
+    where
+        M: ModelTrait + IntoActiveModel<<M::Entity as EntityTrait>::ActiveModel>,
+        M::Entity: EntityTrait<Model = M>,
+        <M::Entity as EntityTrait>::ActiveModel: ActiveModelTrait<Entity = M::Entity> + Send,
+        F: FnOnce(&mut M) -> &mut bool,
+    {
+        self.update::<M, _>(id, |model| {
+            let field = field(model);
+            *field = !*field;
+        })
+        .await
+    }
 
-        self.conn
-            .execute(Statement::from_sql_and_values(
-                DbBackend::Sqlite,
-                &sql,
-                vec![key.to_string().into()],
-            ))
-            .await?;
+    /// Delete a record by primary key.
+    ///
+    /// # Example
+    /// ```ignore
+    /// db.delete::<Task>(1).await?;
+    /// ```
+    pub async fn delete<M>(
+        &self,
+        id: <<M::Entity as EntityTrait>::PrimaryKey as PrimaryKeyTrait>::ValueType,
+    ) -> Result<()>
+    where
+        M: ModelTrait + IntoActiveModel<<M::Entity as EntityTrait>::ActiveModel>,
+        M::Entity: EntityTrait<Model = M>,
+        <M::Entity as EntityTrait>::ActiveModel:
+            ActiveModelTrait<Entity = M::Entity> + ActiveModelBehavior + Send,
+    {
+        let model = self.get::<M>(id).await?.ok_or(DbError::NotFound)?;
 
+        model.delete(&*self.conn).await?;
         Ok(())
     }
 
-    /// Run auto-migrations for all registered schemas.
+    /// Run schema synchronization for all registered entities.
+    ///
+    /// This creates tables for all entities that have been registered
+    /// via the #[model] attribute macro.
     pub async fn migrate(&self) -> Result<()> {
-        for schema_reg in inventory::iter::<SchemaRegistration> {
-            let schema = (schema_reg.get_schema)();
-            self.create_table_if_not_exists(&schema).await?;
+        let backend = self.conn.get_database_backend();
+        let schema = Schema::new(backend);
+
+        for registration in inventory::iter::<EntityRegistration> {
+            let stmt = (registration.create_table)(&schema);
+            // Use IF NOT EXISTS for idempotent migrations
+            self.conn
+                .execute(&stmt)
+                .await
+                .map_err(|e| DbError::Query(e.to_string()))?;
         }
         Ok(())
     }
-
-    async fn create_table_if_not_exists(&self, schema: &TableSchema) -> Result<()> {
-        let mut columns = Vec::new();
-
-        for col in &schema.columns {
-            let mut col_def = format!("{} {}", col.name, col.sql_type);
-
-            if col.primary_key {
-                col_def.push_str(" PRIMARY KEY");
-            }
-
-            if col.auto_increment {
-                col_def.push_str(" AUTOINCREMENT");
-            }
-
-            if !col.nullable && !col.primary_key {
-                col_def.push_str(" NOT NULL");
-            }
-
-            if let Some(ref default) = col.default {
-                col_def.push_str(&format!(" DEFAULT {}", default));
-            }
-
-            columns.push(col_def);
-        }
-
-        let sql = format!(
-            "CREATE TABLE IF NOT EXISTS {} ({})",
-            schema.name,
-            columns.join(", ")
-        );
-
-        self.conn
-            .execute(Statement::from_string(DbBackend::Sqlite, sql))
-            .await?;
-
-        Ok(())
-    }
 }
 
-/// Trait for types that can be inserted for a model.
-pub trait InsertableFor<M: Model>: Send {
-    fn columns_and_values(self) -> (Vec<&'static str>, Vec<SqlValue>);
-}
-
-/// SQL value wrapper.
-#[derive(Clone, Debug)]
-pub enum SqlValue {
-    String(String),
-    Int(i32),
-    Bool(bool),
-    Null,
-}
-
-impl From<String> for SqlValue {
-    fn from(s: String) -> Self {
-        SqlValue::String(s)
-    }
-}
-
-impl From<&str> for SqlValue {
-    fn from(s: &str) -> Self {
-        SqlValue::String(s.to_string())
-    }
-}
-
-impl From<i32> for SqlValue {
-    fn from(i: i32) -> Self {
-        SqlValue::Int(i)
-    }
-}
-
-impl From<bool> for SqlValue {
-    fn from(b: bool) -> Self {
-        SqlValue::Bool(b)
-    }
-}
-
-impl From<SqlValue> for sea_orm::Value {
-    fn from(v: SqlValue) -> Self {
-        match v {
-            SqlValue::String(s) => sea_orm::Value::String(Some(Box::new(s))),
-            SqlValue::Int(i) => sea_orm::Value::Int(Some(i)),
-            SqlValue::Bool(b) => sea_orm::Value::Bool(Some(b)),
-            SqlValue::Null => sea_orm::Value::String(None),
-        }
-    }
-}
+/// Trait for forms that can be converted to an ActiveModel for insertion.
+pub trait Form: serde::de::DeserializeOwned + Send + Sync {}
 
 /// Axum extractor implementation for Db.
 #[async_trait]

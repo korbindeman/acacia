@@ -94,7 +94,12 @@ fn process_element<C: CustomNode>(element: &NodeElement<C>) -> TokenStream2 {
     let tag_name = element.open_tag.name.to_string();
 
     // Check if this is a component (starts with uppercase)
-    if tag_name.chars().next().map(|c| c.is_uppercase()).unwrap_or(false) {
+    if tag_name
+        .chars()
+        .next()
+        .map(|c| c.is_uppercase())
+        .unwrap_or(false)
+    {
         return process_component(element);
     }
 
@@ -189,7 +194,11 @@ fn process_attribute(attr: &NodeAttribute) -> TokenStream2 {
 
             if let Some(value) = &attr.value() {
                 // Check for boolean attributes
-                if name == "checked" || name == "disabled" || name == "selected" || name == "readonly" {
+                if name == "checked"
+                    || name == "disabled"
+                    || name == "selected"
+                    || name == "readonly"
+                {
                     // Unwrap the block to get the inner expression for cleaner generated code
                     let condition = unwrap_block_expr(value);
                     return quote! {
@@ -296,6 +305,8 @@ fn process_block(block: &NodeBlock) -> TokenStream2 {
 
 fn parse_block_body(block: &syn::Block) -> TokenStream2 {
     // For block bodies, we need to process the statements as html content
+    // The key insight is that the block's statements should be evaluated
+    // in the context of the surrounding scope (e.g., for loop variables)
     let stmts = &block.stmts;
 
     // Check if this contains html! macro calls or raw expressions
@@ -306,24 +317,32 @@ fn parse_block_body(block: &syn::Block) -> TokenStream2 {
                 let mac_path = &mac.mac.path;
                 let tokens = &mac.mac.tokens;
                 return quote! {
-                    let __nested = #mac_path!(#tokens);
-                    __html.push_str(&__nested.0);
+                    {
+                        let __nested = #mac_path!(#tokens);
+                        __html.push_str(&__nested.0);
+                    }
                 };
             }
 
-            // Otherwise treat as Fragment
+            // Otherwise treat as Fragment - use a block to preserve scope
             return quote! {
-                let __nested: ::acacia_core::Fragment = #expr;
-                __html.push_str(&__nested.0);
+                {
+                    let __nested: ::acacia_core::Fragment = #expr;
+                    __html.push_str(&__nested.0);
+                }
             };
         }
     }
 
-    // Multiple statements - join them
-    quote! {
-        #(
-            let __stmt_result: ::acacia_core::Fragment = { #stmts };
-            __html.push_str(&__stmt_result.0);
-        )*
+    // Multiple statements - process each one
+    let mut output = TokenStream2::new();
+    for stmt in stmts {
+        output.extend(quote! {
+            {
+                let __stmt_result: ::acacia_core::Fragment = { #stmt };
+                __html.push_str(&__stmt_result.0);
+            }
+        });
     }
+    output
 }
